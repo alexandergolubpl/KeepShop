@@ -1,0 +1,7 @@
+node_modules/
+# генерируется scripts/prepare-www.mjs из keepshop_ai.html
+www/
+*.apk
+backup/
+.DS_Store
+Thumbs.db

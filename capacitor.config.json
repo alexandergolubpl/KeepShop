@@ -1,0 +1,9 @@
+{
+  "appId": "ai.keepshop.app",
+  "appName": "KeepShop",
+  "webDir": "www",
+  "backgroundColor": "#ffffff",
+  "android": {
+    "adjustMarginsForEdgeToEdge": "auto"
+  }
+}

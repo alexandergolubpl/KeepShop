@@ -1,0 +1,21 @@
+{
+  "name": "keepshop",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@capacitor/android": "^7.6.10",
+    "@capacitor/app": "^7.1.2",
+    "@capacitor/cli": "^7.6.10",
+    "@capacitor/core": "^7.6.10",
+    "@capacitor/filesystem": "^7.1.9",
+    "@capacitor/share": "^7.0.4"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^4.0.0"
+  },
+  "scripts": {
+    "prepare:www": "node scripts/prepare-www.mjs",
+    "sync": "npm run prepare:www && npx cap sync android",
+    "icons": "npx capacitor-assets generate --android --iconBackgroundColor \"#f59e0b\" --iconBackgroundColorDark \"#f59e0b\" --splashBackgroundColor \"#ffffff\" --splashBackgroundColorDark \"#18181b\""
+  }
+}
