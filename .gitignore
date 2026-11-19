@@ -1,7 +1,14 @@
 node_modules/
-# генерируется scripts/prepare-www.mjs из keepshop_ai.html
+# сборка Vite (npm run build) — webDir Capacitor
 www/
+# однофайловая сборка (npm run build:single)
+dist-single/
 *.apk
 backup/
 .DS_Store
 Thumbs.db
+
+# подпись релиза — ключ и пароли не публикуем
+android/keystore.properties
+*.jks
+*.keystore
