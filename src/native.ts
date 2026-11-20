@@ -107,6 +107,18 @@ export async function saveAndShare(blob: Blob, filename: string): Promise<void> 
   }
 }
 
+/** Поделиться текстом: системное меню в APK, Web Share в браузере, иначе — в буфер обмена. */
+export async function shareText(text: string, toastFn: (m: string) => void = toast): Promise<void> {
+  try {
+    if (isNative) { await Share.share({ text, dialogTitle: 'Отправить' }); return; }
+    if (navigator.share) { await navigator.share({ text }); return; }
+    await navigator.clipboard.writeText(text);
+    toastFn('Скопировано в буфер обмена');
+  } catch (e) {
+    if (!/cancel|abort/i.test(String((e as Error)?.message ?? e))) toastFn('Не удалось отправить: ' + ((e as Error)?.message || e));
+  }
+}
+
 // ---------- Кнопка «Назад» ----------
 const backHandlers = new Map<string, () => boolean>();
 /** Окно (по id) может перехватить «Назад»: выйти из категории, из редактора и т.п. true — обработано. */

@@ -1,0 +1,56 @@
+rules_version = '2';
+
+// KeepShop — семейное пространство.
+// spaces/{sid}            — пространство: владелец и участники (members: { uid: {name, role, invite?} })
+// spaces/{sid}/{col}/{id} — данные: lists, items, products, cards, recent, favorite, backlog, priceHistory, meta
+// invites/{code}          — приглашение: { spaceId, createdBy, expiresAt }
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isMember(sid) {
+      return signedIn()
+        && request.auth.uid in get(/databases/$(database)/documents/spaces/$(sid)).data.members;
+    }
+
+    match /spaces/{sid} {
+      allow read: if signedIn() && request.auth.uid in resource.data.members;
+
+      allow create: if signedIn()
+        && request.resource.data.owner == request.auth.uid
+        && request.resource.data.members.keys().hasOnly([request.auth.uid]);
+
+      // Участник может менять пространство (имя, участников), но не владельца.
+      // Не участник может только добавить себя — по действующему приглашению.
+      allow update: if signedIn()
+        && request.resource.data.owner == resource.data.owner
+        && (request.auth.uid in resource.data.members || joinWithInvite(sid));
+
+      allow delete: if signedIn() && resource.data.owner == request.auth.uid;
+
+      function joinWithInvite(sid) {
+        let invite = get(/databases/$(database)/documents/invites/$(request.resource.data.members[request.auth.uid].invite)).data;
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members'])
+          && request.resource.data.members.diff(resource.data.members).affectedKeys().hasOnly([request.auth.uid])
+          && invite.spaceId == sid
+          && invite.expiresAt > request.time;
+      }
+
+      match /{col}/{docId} {
+        allow read, write: if isMember(sid);
+      }
+    }
+
+    match /invites/{code} {
+      // Код знает только тот, кому его отправили; перечислять приглашения нельзя
+      allow get: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.createdBy == request.auth.uid
+        && isMember(request.resource.data.spaceId);
+      allow delete: if signedIn() && isMember(resource.data.spaceId);
+    }
+  }
+}

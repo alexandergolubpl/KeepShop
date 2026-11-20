@@ -12,3 +12,10 @@ Thumbs.db
 android/keystore.properties
 *.jks
 *.keystore
+
+# Firebase emulator / CLI
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+android/app/google-services.json

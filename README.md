@@ -4,7 +4,7 @@
 
 KeepShop is a shopping-list app for Android (and the web) with a product database, price estimates, recipes, AI helpers and a loyalty-card wallet. The interface is in Russian; product search links are tuned for Polish stores (Biedronka, Lidl, Żabka, Auchan, Carrefour, Kaufland…).
 
-All data stays on your device. Nothing is sent anywhere except the AI requests you start yourself, which go to Google Gemini with your own API key.
+Your data stays on your device unless you turn on **family sharing**: then it is stored in the shared family space in Firebase, readable only by family members. AI requests that you start yourself go to Google Gemini with your own API key.
 
 ## Features
 
@@ -50,6 +50,13 @@ All data stays on your device. Nothing is sent anywhere except the AI requests y
 - The list can be shown as rows or as color-filled tiles. Tap the barcode to open it full screen.
 - **Import from Catima**: the ZIP export with photos, or `catima.csv`. Simple CSV files with store and number columns are also accepted. **Export to Catima** produces a ZIP.
 
+### Family sharing
+- One shared space for the whole family: lists, "Recent", the product database, purchase history, prices and loyalty cards are the same on every phone.
+- Changes reach the other phones in about a second. Without a network the app keeps working, and changes sync automatically when the connection returns.
+- To invite someone, tap "Invite to family" and send the 8-character code (valid for 7 days). The other person opens menu ⋮ → "Family sharing" and enters the code. Their previous data is backed up first, then replaced with the family's data.
+- Phones sign in anonymously, so no account or password is needed. Only family members can read or change the family's data, which is enforced by Firestore security rules (`firestore.rules`).
+- The owner sees all members and can remove one; anyone can leave the family, and their data stays on their phone.
+
 ### Backups
 - After every change, the database is mirrored to the phone's internal storage and restored automatically if the WebView data is lost.
 - Automatic backups are made daily or weekly to `Documents/KeepShop/`. That folder is visible in a file manager and survives uninstalling the app. The 10 most recent backups are kept.
@@ -63,6 +70,16 @@ All data stays on your device. Nothing is sent anywhere except the AI requests y
 Download the APK from [Releases](../../releases). On the phone, allow installing apps from this source, then open the file.
 
 Requires Android 6.0+ (API 23+). To use the AI features, enter a free Gemini API key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) under menu ⋮ → "🔑 Gemini AI key". The key is stored only on your device.
+
+## Family sharing setup (for your own build)
+
+Family sharing uses Firebase. The project config is in `src/firebase-config.ts`, and the shipped APK already points to the KeepShop project. To use your own Firebase project:
+
+1. In the [Firebase console](https://console.firebase.google.com) create a project and add a **Web app**. Copy its `firebaseConfig` into `src/firebase-config.ts`.
+2. Under **Authentication → Sign-in method**, enable **Anonymous**.
+3. Create a **Firestore Database** (production mode). Then publish the rules from `firestore.rules` (Rules tab), or run `npx firebase-tools deploy --only firestore:rules`.
+
+To test locally with two "phones", run `npx firebase-tools emulators:start --only auth,firestore` and open the app with `?emu=1`.
 
 ## Build from source
 
@@ -97,6 +114,7 @@ For a signed release, copy `android/keystore.properties.example` to `android/key
 | `src/associations.ts` | "often bought together" |
 | `src/price-hints.ts`, `src/ai-prices.ts` | price estimates and AI categorization |
 | `src/backup.ts` | mirror, automatic backups, restore |
+| `src/sync.ts`, `firestore.rules` | family sharing: Firestore sync, invites, security rules |
 | `src/swipe.ts` | swipe navigation and effects |
 | `src/native.ts` | Capacitor bridge: files, sharing, back button, Gemini key |
 | `android/` | Capacitor Android project |

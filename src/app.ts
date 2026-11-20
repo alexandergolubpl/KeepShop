@@ -10,6 +10,8 @@ import { estimatePricesWithAI, categorizeWithAI } from './ai-prices';
 import { initProductsUi, seedProducts, upsertProduct, findProduct, guessCategory, OTHER_CATEGORY } from './products';
 import { convertUnitPrice } from './price-hints';
 import { initCards } from './cards';
+import { initSync } from './sync';
+import { shareText } from './native';
 import { AssociationIndex, REASON_LABEL } from './associations';
 // Поставляемая база товаров: стартовый справочник для новых установок
 import bundledProducts from './data/products.json';
@@ -670,6 +672,10 @@ function loadState() {
   }
 }
 
+// Уникальная часть id: время + случайный хвост. Нужна для семейного доступа — два телефона
+// могут создать запись в одну и ту же миллисекунду, и одинаковые id перезаписали бы друг друга.
+function uniqueSuffix() { return Date.now() + '-' + Math.random().toString(36).slice(2, 6); }
+
 // Что сохраняется на устройстве (и попадает в резервные копии)
 function buildSnapshot() {
   return {
@@ -688,10 +694,32 @@ function buildSnapshot() {
   };
 }
 
+let syncApi = null; // семейный доступ (src/sync.ts), создаётся при запуске
+
 function persistState() {
   const json = JSON.stringify(buildSnapshot());
   SafeStorage.set(STORAGE_KEY, json);
   onStateSaved(json); // зеркало в памяти телефона (src/backup.ts)
+  syncApi?.onLocalChange(); // отправка изменений семье
+}
+
+// Изменения от семьи: заменить части базы, сохранить локально и перерисовать.
+// Если человек в этот момент печатает — перерисуем, когда закончит, чтобы не сбить ввод.
+let renderAfterInput = false;
+function applyRemoteState(patch) {
+  Object.assign(state, patch);
+  if (patch.lists) { state.lists.forEach(normalizeCollaborators); ensureMainList(); }
+  persistState();
+  rebuildPickerProducts();
+  assocIndex = null;
+  document.dispatchEvent(new CustomEvent('ks:cards-changed'));
+  const a = document.activeElement;
+  if (a && a.matches?.('input, textarea, select') && a.closest('.main-content-area')) {
+    if (!renderAfterInput) {
+      renderAfterInput = true;
+      a.addEventListener('blur', () => { renderAfterInput = false; renderApp(); }, { once: true });
+    }
+  } else renderApp();
 }
 
 function saveState() {
@@ -699,7 +727,6 @@ function saveState() {
   assocIndex = null; // связи пересчитаются при следующем запросе
   rebuildPickerProducts();
   renderApp();
-  syncToFirestore();
 }
 
 // Восстановление из резервной копии / импорта. Сессию и приватность не трогаем, чтобы не заблокировать вход.
@@ -728,7 +755,7 @@ function recordProductPrice(productName, price, store = 'Вручную', dateSt
   );
   if (!exists) {
     state.priceHistory.unshift({
-      id: 'ph-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+      id: 'ph-' + uniqueSuffix() + '-' + Math.random().toString(36).slice(2, 6),
       productName: cleanName,
       price: Math.round(numPrice * 100) / 100,
       store: store || 'Магазин',
@@ -2150,7 +2177,7 @@ function addQuickItemToList(listId, rawName, fromSuggestion = false) {
   const est = match?.price ? null : estimateItemPrice(name, match?.unit || '');
   const price = match?.price || est?.price || 0;
   list.items.unshift({
-    id: 'i-' + Date.now(),
+    id: 'i-' + uniqueSuffix(),
     name: match ? match.name : name,
     qty: match ? match.qty : 1,
     unit: match ? match.unit : (est?.unit || 'шт'),
@@ -2639,7 +2666,7 @@ function commitPicker() {
   const undo = makeStateUndo(['lists', 'priceHistory'], 'Добавление отменено');
   let list = pickerTargetList();
   if (!list) {
-    list = { id: 'list-' + Date.now(), title: 'Покупки', color: '#ffffff', pinned: false, sortMode: 'manual', order: 0, collaborators: [], items: [] };
+    list = { id: 'list-' + uniqueSuffix(), title: 'Покупки', color: '#ffffff', pinned: false, sortMode: 'manual', order: 0, collaborators: [], items: [] };
     normalizeCollaborators(list);
     state.lists.unshift(list);
   }
@@ -2654,7 +2681,7 @@ function commitPicker() {
     const unit = sel.unit || match?.unit || 'шт';
     const est = match?.price ? null : estimateItemPrice(sel.name, unit);
     list.items.unshift({
-      id: 'pk-' + Date.now() + '-' + added,
+      id: 'pk-' + uniqueSuffix() + '-' + added,
       name: sel.name,
       qty: Number(sel.qty) || match?.qty || 1,
       unit,
@@ -2926,7 +2953,7 @@ document.addEventListener('click', (e) => {
     } else {
       const list = state.lists.find(l => l.id === acChoice.dataset.listId);
       if (list) {
-        list.items.unshift({ id: 'i-' + Date.now(), name, qty, unit, price, storeName, productUrl: buildProductStoreUrl(name, storeName), cheaperAlt: null, desc, checked: false, order: 0 });
+        list.items.unshift({ id: 'i-' + uniqueSuffix(), name, qty, unit, price, storeName, productUrl: buildProductStoreUrl(name, storeName), cheaperAlt: null, desc, checked: false, order: 0 });
         saveState();
         showToast(`Добавлено: ${name}`);
       }
@@ -3023,7 +3050,7 @@ document.addEventListener('click', (e) => {
     if (item) {
       item.checked = !item.checked;
       if (item.checked) {
-        state.recent.unshift({ id: 'r-' + Date.now(), name: item.name, qty: item.qty, unit: item.unit, price: item.price, date: new Date().toISOString().split('T')[0], desc: item.storeName || list.title });
+        state.recent.unshift({ id: 'r-' + uniqueSuffix(), name: item.name, qty: item.qty, unit: item.unit, price: item.price, date: new Date().toISOString().split('T')[0], desc: item.storeName || list.title });
         if (!item.priceEstimated) recordProductPrice(item.name, item.price, item.storeName || list.title);
       }
       saveState();
@@ -3061,7 +3088,7 @@ document.addEventListener('click', (e) => {
           }
         });
       } else {
-        state.favorite.unshift({ id: 'f-' + Date.now(), name: item.name, qty: item.qty, unit: item.unit, price: item.price, desc: item.desc || '' });
+        state.favorite.unshift({ id: 'f-' + uniqueSuffix(), name: item.name, qty: item.qty, unit: item.unit, price: item.price, desc: item.desc || '' });
         saveState();
       }
     }
@@ -3081,13 +3108,13 @@ document.addEventListener('click', (e) => {
       });
     }
   } else if (action === 'push-frequent') {
-    ensureMainList().items.unshift({ id: 'i-' + Date.now(), name: actBtn.dataset.name, qty: parseFloat(actBtn.dataset.qty) || 1, unit: actBtn.dataset.unit || 'шт', price: Math.round((parseFloat(actBtn.dataset.price) || 0) * 100) / 100, storeName: '', productUrl: buildProductStoreUrl(actBtn.dataset.name), cheaperAlt: null, desc: '', checked: false, order: 0 });
+    ensureMainList().items.unshift({ id: 'i-' + uniqueSuffix(), name: actBtn.dataset.name, qty: parseFloat(actBtn.dataset.qty) || 1, unit: actBtn.dataset.unit || 'шт', price: Math.round((parseFloat(actBtn.dataset.price) || 0) * 100) / 100, storeName: '', productUrl: buildProductStoreUrl(actBtn.dataset.name), cheaperAlt: null, desc: '', checked: false, order: 0 });
     saveState();
     showToast('Добавлено в «Недавние»');
   } else if (action === 'push-collection') {
     const item = (state[actBtn.dataset.section] || []).find(i => i.id === itemId);
     if (item) {
-      ensureMainList().items.unshift({ id: 'i-' + Date.now(), name: item.name, qty: item.qty || 1, unit: item.unit || 'шт', price: item.price || 0, storeName: '', productUrl: buildProductStoreUrl(item.name), cheaperAlt: null, desc: item.desc || '', checked: false, order: 0 });
+      ensureMainList().items.unshift({ id: 'i-' + uniqueSuffix(), name: item.name, qty: item.qty || 1, unit: item.unit || 'шт', price: item.price || 0, storeName: '', productUrl: buildProductStoreUrl(item.name), cheaperAlt: null, desc: item.desc || '', checked: false, order: 0 });
       saveState();
       showToast('Добавлено в «Недавние»');
     }
@@ -3283,7 +3310,7 @@ document.getElementById('cancelSavePinBtn')?.addEventListener('click', () => {
 document.getElementById('confirmSavePinBtn')?.addEventListener('click', () => {
   const label = document.getElementById('newPinLabelInput').value.trim() || `Точка (${state.storeSearch.lat}, ${state.storeSearch.lng})`;
   state.storeSearch.savedLocations.unshift({
-    id: 'loc-' + Date.now(),
+    id: 'loc-' + uniqueSuffix(),
     label,
     lat: state.storeSearch.lat,
     lng: state.storeSearch.lng
@@ -3446,7 +3473,7 @@ document.getElementById('addCollabMemberBtn')?.addEventListener('click', () => {
   if (!list || (!name && !email)) return;
   normalizeCollaborators(list);
   list.collaborators.push({
-    id: 'c-' + Date.now(),
+    id: 'c-' + uniqueSuffix(),
     name: name || email.split('@')[0],
     email,
     role,
@@ -3478,7 +3505,7 @@ document.getElementById('shareListAsTextBtn')?.addEventListener('click', () => {
 document.getElementById('createListBtn')?.addEventListener('click', () => {
   const inp = document.getElementById('newListTitleInput');
   const title = (inp?.value || '').trim() || `Список #${state.lists.length + 1}`;
-  const nl = { id: 'list-' + Date.now(), title, color: state.newListColor || '#ffffff', pinned: false, sortMode: 'manual', order: 0, collaborators: [], items: [] };
+  const nl = { id: 'list-' + uniqueSuffix(), title, color: state.newListColor || '#ffffff', pinned: false, sortMode: 'manual', order: 0, collaborators: [], items: [] };
   normalizeCollaborators(nl);
   state.lists.unshift(nl);
   if (inp) inp.value = '';
@@ -3497,7 +3524,7 @@ document.getElementById('saveItemModalBtn')?.addEventListener('click', () => {
   const rawUrl = document.getElementById('modalItemProductUrl').value.trim();
 
   const payload = {
-    id: editId || ('item-' + Date.now()),
+    id: editId || ('item-' + uniqueSuffix()),
     name,
     qty: parseFloat(document.getElementById('modalItemQty').value) || 1,
     unit: document.getElementById('modalItemUnit').value || 'шт',
@@ -3604,10 +3631,10 @@ document.getElementById('applyReceiptItemsBtn')?.addEventListener('click', () =>
   receiptBuffer.forEach((it, idx) => {
     recordProductPrice(it.name, Number(it.price) || 0, storeVal, dateVal);
     if (dest === 'list') {
-      if (!state.lists.length) state.lists.push({ id: 'list-' + Date.now(), title: 'Из чека', color: '#fef3c7', pinned: false, sortMode: 'manual', order: 0, collaborators: [], items: [] });
-      state.lists[0].items.unshift({ id: 'rc-' + Date.now() + idx, name: it.name, qty: Number(it.qty) || 1, unit: it.unit || 'шт', price: Number(it.price) || 0, storeName: storeVal, productUrl: buildProductStoreUrl(it.name, storeVal), cheaperAlt: null, desc: 'Из чека', checked: false, order: idx });
+      if (!state.lists.length) state.lists.push({ id: 'list-' + uniqueSuffix(), title: 'Из чека', color: '#fef3c7', pinned: false, sortMode: 'manual', order: 0, collaborators: [], items: [] });
+      state.lists[0].items.unshift({ id: 'rc-' + uniqueSuffix() + idx, name: it.name, qty: Number(it.qty) || 1, unit: it.unit || 'шт', price: Number(it.price) || 0, storeName: storeVal, productUrl: buildProductStoreUrl(it.name, storeVal), cheaperAlt: null, desc: 'Из чека', checked: false, order: idx });
     } else {
-      state.recent.unshift({ id: 'rec-' + Date.now() + idx, name: it.name, qty: Number(it.qty) || 1, unit: it.unit || 'шт', price: Number(it.price) || 0, date: dateVal, desc: storeVal });
+      state.recent.unshift({ id: 'rec-' + uniqueSuffix() + idx, name: it.name, qty: Number(it.qty) || 1, unit: it.unit || 'шт', price: Number(it.price) || 0, date: dateVal, desc: storeVal });
     }
   });
   saveState();
@@ -3663,7 +3690,7 @@ document.getElementById('commitKeepImportBtn')?.addEventListener('click', () => 
   const title = document.getElementById('keepNoteTitle').value.trim() || 'Заметка Google Keep';
   const undoKeep = makeStateUndo(['lists', 'favorite'], 'Импорт из Google Keep отменён');
   const nl = {
-    id: 'list-' + Date.now(),
+    id: 'list-' + uniqueSuffix(),
     title,
     color: '#fef3c7',
     pinned: false,
@@ -3672,10 +3699,10 @@ document.getElementById('commitKeepImportBtn')?.addEventListener('click', () => 
     collaborators: [],
     items: selected.map((it, idx) => {
       if (saveToFav && it.isNew) {
-        state.favorite.unshift({ id: 'fv-' + Date.now() + idx, name: it.name, qty: Number(it.qty) || 1, unit: it.unit || 'шт', price: Number(it.price) || 0, desc: 'Из Google Keep' });
+        state.favorite.unshift({ id: 'fv-' + uniqueSuffix() + idx, name: it.name, qty: Number(it.qty) || 1, unit: it.unit || 'шт', price: Number(it.price) || 0, desc: 'Из Google Keep' });
       }
       return {
-        id: 'kp-' + Date.now() + idx,
+        id: 'kp-' + uniqueSuffix() + idx,
         name: it.name,
         qty: Number(it.qty) || 1,
         unit: it.unit || 'шт',
@@ -4058,7 +4085,6 @@ initSwipeNav({ getActiveTab: () => state.activeTab, goToTab: (tab) => switchActi
 state.activeTab = 'recent';
 renderApp();
 switchActiveTab('recent');
-initCloud();
 if (!Array.isArray(state.products) || !state.products.length) {
   const userItems = [...state.lists.flatMap(l => l.items), ...state.favorite, ...state.backlog, ...state.recent];
   state.products = seedProducts(BUILTIN_PRODUCTS, userItems, bundledProducts);
@@ -4088,7 +4114,7 @@ const productsUi = initProductsUi({
   toast: (m, undo) => showToast(m, undo || null),
   addToMain: (p) => {
     const est = estimateItemPrice(p.name, p.unit);
-    ensureMainList().items.unshift({ id: 'i-' + Date.now(), name: p.name, qty: 1, unit: p.unit, price: est?.price || 0, priceEstimated: !!est?.estimated, storeName: '', productUrl: buildProductStoreUrl(p.name), cheaperAlt: null, desc: '', checked: false, order: 0 });
+    ensureMainList().items.unshift({ id: 'i-' + uniqueSuffix(), name: p.name, qty: 1, unit: p.unit, price: est?.price || 0, priceEstimated: !!est?.estimated, storeName: '', productUrl: buildProductStoreUrl(p.name), cheaperAlt: null, desc: '', checked: false, order: 0 });
     ensureMainList().items.forEach((it, i) => it.order = i);
     saveState();
     showToast(`«${p.name}» добавлен в «Недавние»`);
@@ -4108,6 +4134,14 @@ const cardsUi = initCards({
   saveFile: (blob, name) => downloadBlob(blob, name),
 });
 document.getElementById('headerCardsBtn')?.addEventListener('click', () => cardsUi.open());
+syncApi = initSync({
+  getState: () => state,
+  applyRemote: (patch) => applyRemoteState(patch),
+  toast: (m) => showToast(m),
+  backup: (reason) => createBackup(reason),
+  shareText: (text) => shareText(text, (m) => showToast(m)),
+});
+document.getElementById('menuSyncBtn')?.addEventListener('click', () => syncApi.open());
 initBackups({ getSnapshot: buildSnapshot, applySnapshot: (data, label) => applySnapshot(data, label), toast: (m) => showToast(m) });
 if (!hadLocalState) {
   // данные WebView пропали (очистка кэша и т.п.) — берём базу из памяти телефона
