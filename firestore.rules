@@ -4,6 +4,7 @@ rules_version = '2';
 // spaces/{sid}            — пространство: владелец и участники (members: { uid: {name, role, invite?} })
 // spaces/{sid}/{col}/{id} — данные: lists, items, products, cards, recent, favorite, backlog, priceHistory, meta
 // invites/{code}          — приглашение: { spaceId, createdBy, expiresAt }
+// users/{uid}             — { spaceId }: семья аккаунта (вход через Google)
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -42,6 +43,12 @@ service cloud.firestore {
       match /{col}/{docId} {
         allow read, write: if isMember(sid);
       }
+    }
+
+    // users/{uid} — к какой семье относится аккаунт (для восстановления после переустановки).
+    // Каждый видит и меняет только свою запись.
+    match /users/{uid} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
     }
 
     match /invites/{code} {

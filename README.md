@@ -54,7 +54,8 @@ Your data stays on your device unless you turn on **family sharing**: then it is
 - One shared space for the whole family: lists, "Recent", the product database, purchase history, prices and loyalty cards are the same on every phone.
 - Changes reach the other phones in about a second. Without a network the app keeps working, and changes sync automatically when the connection returns.
 - To invite someone, tap "Invite to family" and send the 8-character code (valid for 7 days). The other person opens menu ⋮ → "Family sharing" and enters the code. Their previous data is backed up first, then replaced with the family's data.
-- Phones sign in anonymously, so no account or password is needed. Only family members can read or change the family's data, which is enforced by Firestore security rules (`firestore.rules`).
+- No account is required: phones sign in anonymously. Only family members can read or change the family's data, which is enforced by Firestore security rules (`firestore.rules`).
+- **Sign in with Google** (optional) links your Google account to your family membership. After reinstalling the app or on a new phone, just sign in with Google and the family reconnects automatically, with no new invite code needed. On Android the system account picker is used.
 - The owner sees all members and can remove one; anyone can leave the family, and their data stays on their phone.
 
 ### Backups
@@ -77,7 +78,8 @@ Family sharing uses Firebase. The project config is in `src/firebase-config.ts`,
 
 1. In the [Firebase console](https://console.firebase.google.com) create a project and add a **Web app**. Copy its `firebaseConfig` into `src/firebase-config.ts`.
 2. Under **Authentication → Sign-in method**, enable **Anonymous**.
-3. Create a **Firestore Database** (production mode). Then publish the rules from `firestore.rules` (Rules tab), or run `npx firebase-tools deploy --only firestore:rules`.
+3. To use Google sign-in, enable **Google** in Sign-in method. Add the Android app `ai.keepshop.app` with the SHA-1 fingerprints of your signing keys (debug and release), download `google-services.json` and put it into `android/app/` (the file is git-ignored).
+4. Create a **Firestore Database** (production mode). Then publish the rules from `firestore.rules` (Rules tab), or run `npx firebase-tools deploy --only firestore:rules`.
 
 To test locally with two "phones", run `npx firebase-tools emulators:start --only auth,firestore` and open the app with `?emu=1`.
 

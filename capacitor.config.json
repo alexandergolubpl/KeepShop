@@ -5,5 +5,13 @@
   "backgroundColor": "#ffffff",
   "android": {
     "adjustMarginsForEdgeToEdge": "auto"
+  },
+  "plugins": {
+    "FirebaseAuthentication": {
+      "skipNativeAuth": true,
+      "providers": [
+        "google.com"
+      ]
+    }
   }
 }
