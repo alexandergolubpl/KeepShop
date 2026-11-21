@@ -1151,6 +1151,7 @@ function renderItemCardHTML(list, item, itemIdx, totalCount, isReadOnly) {
     title: escapeHTML(item.name),
     total: est + formatMoney(item.qty * item.price),
     meta: `<span>${item.qty} ${escapeHTML(item.unit)} × ${est}${formatMoney(item.price)}</span>
+      ${item.checked && item.checkedBy ? `<span class="text-emerald-600 dark:text-emerald-400 font-semibold">✓ взял(а): ${escapeHTML(item.checkedBy)}</span>` : item.addedBy ? `<span>👤 ${escapeHTML(item.addedBy)}</span>` : ''}
       <a href="${escapeHTML(storeHref)}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center px-1.5 py-px rounded-md bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 text-blue-700 dark:text-blue-300 text-[10px] font-bold max-w-full truncate">🔗 ${escapeHTML(item.storeName || 'В магазин')} ↗</a>`,
     body: `
       ${item.desc ? `<div class="text-[11px] text-slate-500 dark:text-zinc-400 mt-1.5 break-words">${escapeHTML(item.desc)}</div>` : ''}
@@ -1263,6 +1264,7 @@ function renderItemRowHTML(list, item, isReadOnly) {
   return itemRowShell({
     attrs: `data-row-item="${item.id}" ${ids} data-action="toggle-check" ${isReadOnly ? '' : 'data-row-drag="1"'}`,
     done: item.checked,
+    note: item.checked && item.checkedBy ? '✓ ' + escapeHTML(item.checkedBy) : '',
     lead: `<span class="w-[18px] h-[18px] rounded-[5px] border-2 flex items-center justify-center shrink-0 text-[11px] leading-none font-bold ${item.checked ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-slate-300 dark:border-zinc-600'}">${item.checked ? '✓' : ''}</span>`,
     title: escapeHTML(item.name),
     titleAttr: `title="${escapeHTML(item.desc || item.name)}"`,
@@ -2183,6 +2185,7 @@ function addQuickItemToList(listId, rawName, fromSuggestion = false) {
     unit: match ? match.unit : (est?.unit || 'шт'),
     price,
     priceEstimated: !!est?.estimated || (!!match?.price && !!match?.priceEstimated),
+    ...(syncApi?.me() ? { addedBy: syncApi.me().name } : {}),
     storeName,
     productUrl: buildProductStoreUrl(name, storeName, match?.productUrl || ''),
     cheaperAlt: null,
@@ -2687,6 +2690,7 @@ function commitPicker() {
       unit,
       price: match?.price || est?.price || 0,
       priceEstimated: !!est?.estimated || (!!match?.price && !!match?.priceEstimated),
+      ...(syncApi?.me() ? { addedBy: syncApi.me().name } : {}),
       storeName,
       productUrl: buildProductStoreUrl(sel.name, storeName, match?.productUrl || ''),
       cheaperAlt: null,
@@ -3049,6 +3053,10 @@ document.addEventListener('click', (e) => {
     const item = list.items.find(i => i.id === itemId);
     if (item) {
       item.checked = !item.checked;
+      // кто взял (в семейном доступе)
+      const me = syncApi?.me();
+      if (item.checked && me) { item.checkedBy = me.name; item.checkedByUid = me.uid; item.checkedAt = Date.now(); }
+      if (!item.checked) { delete item.checkedBy; delete item.checkedByUid; delete item.checkedAt; }
       if (item.checked) {
         state.recent.unshift({ id: 'r-' + uniqueSuffix(), name: item.name, qty: item.qty, unit: item.unit, price: item.price, date: new Date().toISOString().split('T')[0], desc: item.storeName || list.title });
         if (!item.priceEstimated) recordProductPrice(item.name, item.price, item.storeName || list.title);

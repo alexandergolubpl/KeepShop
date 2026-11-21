@@ -16,10 +16,12 @@ import {
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
   collection, doc, onSnapshot, writeBatch, setDoc, getDoc, updateDoc, deleteField, serverTimestamp, Timestamp,
+  query, orderBy, limit,
   type Firestore, type Unsubscribe, type DocumentData,
 } from 'firebase/firestore';
 import { firebaseConfig } from './firebase-config';
 import { isNative, setModalBackHandler } from './native';
+import { initJournal, describeOps, type LogEntry, type LogKind, type Op } from './journal';
 
 // ---------- Раскладка базы на записи ----------
 const COLS = ['lists', 'items', 'products', 'cards', 'recent', 'favorite', 'backlog', 'priceHistory', 'meta'] as const;
@@ -188,7 +190,10 @@ const normCode = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
 const fmtCode = (c: string) => c.slice(0, 4) + '-' + c.slice(4);
 
 // ==================== Движок синхронизации ====================
-export function initSync(host: SyncHost): { onLocalChange: () => void; open: () => void; status: () => SyncStatus } {
+export function initSync(host: SyncHost): {
+  onLocalChange: () => void; open: () => void; status: () => SyncStatus;
+  me: () => { uid: string; name: string } | null; openJournal: () => void;
+} {
   let cfg = loadCfg();
   let status: SyncStatus = cfg.spaceId ? 'connecting' : 'off';
   let unsubs: Unsubscribe[] = [];
@@ -204,6 +209,20 @@ export function initSync(host: SyncHost): { onLocalChange: () => void; open: () 
   let myUid = '';
   let lastError = '';
   const pending = new Map<Col, boolean>();
+  const journal = initJournal();
+  let suppressLog = false;       // первичная загрузка данных в семью — не событие для журнала
+  let logReceived = false;
+  const myName = () => members[myUid]?.name || cfg.myName || 'Участник';
+  const listTitle = (id: string) => {
+    const l = (host.getState().lists || []).find((x: { id: string }) => String(x.id) === id);
+    return l ? (l.isMain ? 'Недавние' : l.title) : 'список';
+  };
+  /** Отдельная запись журнала (вступление, приглашение и т.п.). */
+  function addLog(kind: LogKind, text: string, sid = cfg.spaceId): void {
+    if (!sid || !myUid) return;
+    const entry: LogEntry = { ms: Date.now(), uid: myUid, name: myName(), kind, text };
+    setDoc(doc(collection(firebase().db, 'spaces', sid, 'log')), entry).catch(e => console.warn('KeepShop log', e));
+  }
   // наши недавние записи, которых ещё нет в облачной копии: col → id → значение (null — удаление)
   const expected = new Map<Col, Map<string, string | null>>(COLS.map(c => [c, new Map()]));
   let expectedSince = 0;
@@ -240,16 +259,27 @@ export function initSync(host: SyncHost): { onLocalChange: () => void; open: () 
     if (!cfg.spaceId || !ready || !db) return;
     const local = toDocs(host.getState());
     const ops: { col: Col; id: string; data: DocumentData | null }[] = [];
+    const described: Op[] = [];
+    const parse = (str: string | undefined) => { if (!str) return null; try { return JSON.parse(str); } catch { return null; } };
     for (const col of COLS) {
       const prev = synced.get(col)!;
-      local[col].forEach((data, id) => { const s = stable(data); if (prev.get(id) !== s) { ops.push({ col, id, data }); prev.set(id, s); } });
-      [...prev.keys()].forEach(id => { if (!local[col].has(id)) { ops.push({ col, id, data: null }); prev.delete(id); } });
+      local[col].forEach((data, id) => {
+        const s = stable(data);
+        const before = prev.get(id);
+        if (before !== s) { ops.push({ col, id, data }); described.push({ col, id, prev: parse(before), next: data }); prev.set(id, s); }
+      });
+      [...prev.keys()].forEach(id => {
+        if (!local[col].has(id)) { ops.push({ col, id, data: null }); described.push({ col, id, prev: parse(prev.get(id)), next: null }); prev.delete(id); }
+      });
     }
     if (!ops.length) return;
     const sid = cfg.spaceId;
     expectedSince = Date.now();
+    // записи журнала уходят в том же пакете, что и сами изменения
+    const logs = suppressLog ? [] : describeOps(described, listTitle);
     for (let i = 0; i < ops.length; i += 450) {
       const batch = writeBatch(db);
+      if (i === 0) logs.forEach(l => batch.set(doc(collection(db!, 'spaces', sid, 'log')), { ...l, ms: Date.now(), uid: myUid, name: myName() }));
       for (const op of ops.slice(i, i + 450)) {
         const ref = doc(db, 'spaces', sid, op.col, op.id);
         if (op.data) batch.set(ref, op.data); else batch.delete(ref);
@@ -313,6 +343,26 @@ export function initSync(host: SyncHost): { onLocalChange: () => void; open: () 
       if (!modal.classList.contains('hidden')) renderPanel();
     }, (e) => { lastError = String(e?.message || e); setStatus('error'); }));
 
+    // журнал семьи: последние 150 событий
+    logReceived = false;
+    journal.setEnabled(true);
+    // Сначала журнал приходит из кэша телефона (без новых событий), потом — с сервера.
+    // Сводку «пока вас не было» считаем по первому снимку с сервера, а не по кэшу.
+    unsubs.push(onSnapshot(query(collection(db, 'spaces', sid, 'log'), orderBy('ms', 'desc'), limit(150)), { includeMetadataChanges: true }, (snap) => {
+      const list = snap.docs.map(d => ({ id: d.id, ...(d.data() as LogEntry) }));
+      if (snap.metadata.fromCache && !logReceived) { journal.update(list, myUid, false); return; }
+      const initial = !logReceived;
+      logReceived = true;
+      journal.update(list, myUid, initial);
+      if (!initial) {
+        const fresh = snap.docChanges()
+          .filter(c => c.type === 'added' && !c.doc.metadata.hasPendingWrites)
+          .map(c => c.doc.data() as LogEntry)
+          .filter(e => e.uid !== myUid && e.ms > Date.now() - 5 * 60_000);
+        journal.notifyNew(fresh);
+      }
+    }, (e) => console.warn('KeepShop log listener', e)));
+
     for (const col of COLS) {
       unsubs.push(onSnapshot(collection(db, 'spaces', sid, col), { includeMetadataChanges: true }, (snap) => {
         pending.set(col, snap.metadata.hasPendingWrites);
@@ -362,6 +412,7 @@ export function initSync(host: SyncHost): { onLocalChange: () => void; open: () 
     cfg = { myName: cfg.myName };
     saveCfg(cfg);
     members = {};
+    journal.setEnabled(false);
     recomputeStatus();
     if (!modal.classList.contains('hidden')) renderPanel();
   }
@@ -375,10 +426,12 @@ export function initSync(host: SyncHost): { onLocalChange: () => void; open: () 
     cfg = { spaceId: ref.id, myName };
     saveCfg(cfg);
     void rememberSpace(ref.id);
-    // мы — источник данных: отправляем всё, затем слушаем
+    // мы — источник данных: отправляем всё (это не событие для журнала), затем слушаем
     stopListening();
     ready = true;
-    uploadNow();
+    suppressLog = true;
+    try { uploadNow(); } finally { suppressLog = false; }
+    addLog('member', `создано семейное пространство «${name || 'Семья'}»`, ref.id);
     listen(ref.id);
   }
 
@@ -396,6 +449,7 @@ export function initSync(host: SyncHost): { onLocalChange: () => void; open: () 
     cfg = { spaceId, myName };
     saveCfg(cfg);
     void rememberSpace(spaceId);
+    addLog('member', 'вступление в семью', spaceId);
     listen(spaceId); // первые снимки заменят локальные данные данными семьи
   }
 
@@ -406,11 +460,13 @@ export function initSync(host: SyncHost): { onLocalChange: () => void; open: () 
       spaceId: cfg.spaceId, createdBy: myUid, createdAt: serverTimestamp(),
       expiresAt: Timestamp.fromMillis(Date.now() + 7 * 86_400_000),
     });
+    addLog('invite', 'создано приглашение в семью');
     return code;
   }
 
   async function leaveSpace(): Promise<void> {
     const { db } = firebase();
+    addLog('member', 'выход из семьи'); // пишем, пока ещё участник
     try { await updateDoc(doc(db, 'spaces', cfg.spaceId!), { [`members.${myUid}`]: deleteField() }); } catch { /* без сети — выйдем локально */ }
     void rememberSpace(null);
     leaveLocal();
@@ -470,6 +526,7 @@ export function initSync(host: SyncHost): { onLocalChange: () => void; open: () 
 
   async function removeMember(uid: string): Promise<void> {
     const { db } = firebase();
+    addLog('member', `из семьи удалён(а) «${members[uid]?.name || 'участник'}»`);
     await updateDoc(doc(db, 'spaces', cfg.spaceId!), { [`members.${uid}`]: deleteField() });
   }
 
@@ -544,6 +601,7 @@ export function initSync(host: SyncHost): { onLocalChange: () => void; open: () 
         <div class="text-xs mt-0.5 ${status === 'error' ? 'text-rose-500' : status === 'synced' ? 'text-emerald-600' : 'text-slate-500'}">${STATUS_TEXT[status]}${status === 'error' && lastError ? ': ' + esc(lastError) : ''}</div>
       </div>
       ${accountBlock()}
+      <button type="button" data-sync="journal" class="${btn} bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200">📜 Журнал семьи и уведомления</button>
       <div>
         <div class="text-xs font-bold text-slate-500 mb-1">Участники (${list.length})</div>
         <div class="space-y-1">${list.map(([uid, m]) => `
@@ -595,6 +653,9 @@ export function initSync(host: SyncHost): { onLocalChange: () => void; open: () 
         shownCode = await createInvite();
       } else if (act === 'share') {
         host.shareText(`Присоединяйся к нашим общим покупкам в KeepShop!\nКод приглашения: ${fmtCode(shownCode)}\n(⋮ → «Семейный доступ» → «Присоединиться по коду», действует 7 дней)`);
+      } else if (act === 'journal') {
+        modal.classList.add('hidden');
+        journal.open();
       } else if (act === 'google') {
         setStatus(cfg.spaceId ? status : 'connecting');
         host.toast(await googleSignIn());
@@ -630,6 +691,9 @@ export function initSync(host: SyncHost): { onLocalChange: () => void; open: () 
   return {
     onLocalChange,
     status: () => status,
+    /** Кто я в семье (для «кто взял»); null — не в семье. */
+    me: () => (cfg.spaceId && myUid ? { uid: myUid, name: myName() } : null),
+    openJournal: () => journal.open(),
     open() {
       document.getElementById('moreMenuDropdown')?.classList.add('hidden');
       lastError = lastError && cfg.spaceId ? lastError : '';

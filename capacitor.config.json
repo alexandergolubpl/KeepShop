@@ -12,6 +12,10 @@
       "providers": [
         "google.com"
       ]
+    },
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_keepshop",
+      "iconColor": "#F59E0B"
     }
   }
 }

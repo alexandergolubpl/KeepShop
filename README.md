@@ -57,6 +57,9 @@ Your data stays on your device unless you turn on **family sharing**: then it is
 - No account is required: phones sign in anonymously. Only family members can read or change the family's data, which is enforced by Firestore security rules (`firestore.rules`).
 - **Sign in with Google** (optional) links your Google account to your family membership. After reinstalling the app or on a new phone, just sign in with Google and the family reconnects automatically, with no new invite code needed. On Android the system account picker is used.
 - The owner sees all members and can remove one; anyone can leave the family, and their data stays on their phone.
+- **Who took what:** a checked item shows who took it ("✓ Anna"), and new items show who added them.
+- **📜 Family journal** (🔔 in the header): a shared feed of what each member did: added, taken, needed again, removed, changed, lists, cards, invitations, joining and leaving. Bulk actions become one entry, and reordering is not logged.
+- **Notifications:** a banner for other members' actions, an unread counter on 🔔, a "While you were away" summary when you open the app, and an Android notification while the app runs in the background. You can turn them off in the journal. Notifications are not delivered while the app is fully closed; you see the summary next time you open it.
 
 ### Backups
 - After every change, the database is mirrored to the phone's internal storage and restored automatically if the WebView data is lost.
@@ -117,6 +120,7 @@ For a signed release, copy `android/keystore.properties.example` to `android/key
 | `src/price-hints.ts`, `src/ai-prices.ts` | price estimates and AI categorization |
 | `src/backup.ts` | mirror, automatic backups, restore |
 | `src/sync.ts`, `firestore.rules` | family sharing: Firestore sync, invites, security rules |
+| `src/journal.ts` | family journal and notifications |
 | `src/swipe.ts` | swipe navigation and effects |
 | `src/native.ts` | Capacitor bridge: files, sharing, back button, Gemini key |
 | `android/` | Capacitor Android project |
