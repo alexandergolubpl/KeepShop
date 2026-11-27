@@ -43,6 +43,17 @@ Your data stays on your device unless you turn on **family sharing**: then it is
 - Price history with a chart for every product.
 - **Note:** the "📍 Prices" store comparison on the map is a **simulation**. Store chains have no public price API, so its results are estimates and are marked ≈.
 
+### Deals from store leaflets
+- "🏷 Deals" in "Recent" (or menu ⋮) finds current promotions for the items you still need to buy. Blix.pl finds the leaflet pages of the chains you pick (Biedronka, Lidl, Kaufland, Auchan and others) that contain each item, and Gemini reads the price, the old price, the discount, the conditions and the dates from the page images.
+- Items with a deal get a "🏷 −34%" badge; every deal links to its leaflet page. An optional daily check runs on start and shows a banner or an Android notification for new deals.
+- Works with a free Gemini key.
+
+### Tidy up names and prices
+- Menu ⋮ → "🧹 Tidy up" checks every item in lists, history, favorites and the product database: expands receipt abbreviations (`PiwTyskie0,5lPus` → "Пиво Tyskie 0,5 л, банка"), fixes typos and slang, keeps your notes in brackets.
+- Prices are updated from your latest real purchases; items without any price get an estimate (≈).
+- Everything is shown as a preview with checkboxes first; a backup is made before applying, and there is Undo. Old spellings are remembered, so new receipts get proper names automatically.
+- Items added without a price get one automatically in the background (history, product database, price hints, then a Gemini estimate).
+
 ### Loyalty cards (inspired by Catima)
 - You can add a card in three ways: **scan it with the camera**, decode the barcode from a **photo**, or type it in by hand.
 - 13 barcode formats: QR, EAN-13/8, UPC-A/E, Code 128/39/93, ITF, PDF417, Aztec, Data Matrix, Codabar.
@@ -73,7 +84,7 @@ Your data stays on your device unless you turn on **family sharing**: then it is
 
 Download the APK from [Releases](../../releases). On the phone, allow installing apps from this source, then open the file.
 
-Requires Android 6.0+ (API 23+). To use the AI features, enter a free Gemini API key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) under menu ⋮ → "🔑 Gemini AI key". The key is stored only on your device.
+Requires Android 6.0+ (API 23+). The app checks GitHub Releases for updates (menu ⋮ → "⬆️ Check for updates"), downloads the new APK and opens the Android installer; your data stays. The first time, Android asks to allow installing from KeepShop. To use the AI features, enter a free Gemini API key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) under menu ⋮ → "🔑 Gemini AI key". The key is stored only on your device.
 
 ## Family sharing setup (for your own build)
 
@@ -121,6 +132,9 @@ For a signed release, copy `android/keystore.properties.example` to `android/key
 | `src/backup.ts` | mirror, automatic backups, restore |
 | `src/sync.ts`, `firestore.rules` | family sharing: Firestore sync, invites, security rules |
 | `src/journal.ts` | family journal and notifications |
+| `src/promos.ts` | deals from store leaflets (Blix.pl + Gemini) |
+| `src/tidy.ts` | tidy up names and prices |
+| `src/updater.ts`, `ApkUpdaterPlugin.java` | in-app update from GitHub Releases |
 | `src/swipe.ts` | swipe navigation and effects |
 | `src/native.ts` | Capacitor bridge: files, sharing, back button, Gemini key |
 | `android/` | Capacitor Android project |

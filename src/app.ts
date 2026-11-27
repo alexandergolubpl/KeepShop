@@ -12,6 +12,8 @@ import { convertUnitPrice } from './price-hints';
 import { initCards } from './cards';
 import { initSync } from './sync';
 import { initPromos } from './promos';
+import { initTidy } from './tidy';
+import { initUpdater } from './updater';
 import { shareText } from './native';
 import { AssociationIndex, REASON_LABEL } from './associations';
 // Поставляемая база товаров: стартовый справочник для новых установок
@@ -695,8 +697,9 @@ function buildSnapshot() {
   };
 }
 
-let syncApi = null; // семейный доступ (src/sync.ts), создаётся при запуске
-let promosApi = null; // поиск акций (src/promos.ts)
+var syncApi = null; // var: persistState вызывается при запуске раньше этой строки; семейный доступ (src/sync.ts), создаётся при запуске
+var promosApi = null; // поиск акций (src/promos.ts)
+var tidyApi = null; // «Навести порядок»: названия и цены (src/tidy.ts)
 
 function persistState() {
   const json = JSON.stringify(buildSnapshot());
@@ -726,6 +729,7 @@ function applyRemoteState(patch) {
 
 function saveState() {
   persistState();
+  scheduleAutoPrices();
   assocIndex = null; // связи пересчитаются при следующем запросе
   rebuildPickerProducts();
   renderApp();
@@ -906,6 +910,44 @@ function fillMissingPrices() {
     if (est) { it.price = est.price; it.priceEstimated = est.estimated; changed = true; }
   }));
   return changed;
+}
+
+// Автодобавление цен: после изменений товары без цены получают цену из истории/базы/справочника,
+// а оставшиеся — тихую оценку ИИ (если есть ключ). Не чаще раза в 10 минут, одни и те же товары не переспрашиваем.
+var autoPricesTimer = 0; // var: saveState может вызваться раньше этой строки
+var autoPricesAiAt = 0;
+var autoPricesTried = new Set();
+function scheduleAutoPrices() {
+  clearTimeout(autoPricesTimer);
+  autoPricesTimer = setTimeout(runAutoPrices, 15000);
+}
+async function runAutoPrices() {
+  if (aiPricesRunning) return;
+  if (fillMissingPrices()) { saveState(); return; }
+  const missing = [];
+  const seen = new Set();
+  [...state.lists.flatMap(l => l.items), ...state.favorite, ...state.backlog].forEach(it => {
+    if (Number(it.price) > 0 || !it.name) return;
+    const k = normName(it.name) + '|' + (it.unit || 'шт');
+    if (seen.has(k) || autoPricesTried.has(k)) return;
+    seen.add(k); missing.push({ k, name: it.name, unit: it.unit || 'шт' });
+  });
+  let key = '';
+  try { key = localStorage.getItem('keepshop_gemini_api_key') || ''; } catch (e) {}
+  if (!missing.length || !key || navigator.onLine === false || Date.now() - autoPricesAiAt < 10 * 60000) return;
+  autoPricesAiAt = Date.now();
+  missing.forEach(m => autoPricesTried.add(m.k));
+  try {
+    const prices = await estimatePricesWithAI(missing.map(m => ({ name: m.name, unit: m.unit })), askGeminiWithBackoff);
+    let filled = 0;
+    const byKey = new Map(missing.map((m, i) => [m.k, prices[i]]));
+    [...state.lists.flatMap(l => l.items), ...state.favorite, ...state.backlog].forEach(it => {
+      if (Number(it.price) > 0) return;
+      const p = byKey.get(normName(it.name) + '|' + (it.unit || 'шт'));
+      if (p) { it.price = p; it.priceEstimated = true; it.basePrice = p; filled++; }
+    });
+    if (filled) { saveState(); showToast(`✨ Добавлены цены (≈): ${filled}`); }
+  } catch (e) { console.warn('KeepShop auto prices', e); }
 }
 
 // Товары без цены → один запрос к Gemini (src/ai-prices.ts). onlyListId — только этот список.
@@ -2029,10 +2071,10 @@ function renderStatisticsView() {
 }
 
 // ==================== GEMINI AI WITH EXPONENTIAL BACKOFF ====================
-async function askGeminiWithBackoff(payload) {
+async function askGeminiWithBackoff(payload, model = GEMINI_MODEL) {
   const apiKey = await getGeminiKey();
   if (!apiKey) { showToast('Укажите ключ Gemini AI в меню ⋮'); throw new Error('Gemini key missing'); }
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   const delays = [1000, 2000, 4000];
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     try {
@@ -2040,7 +2082,7 @@ async function askGeminiWithBackoff(payload) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(30000)
+        signal: AbortSignal.timeout(model === GEMINI_MODEL ? 30000 : 90000)
       });
       if (res.ok) return await res.json();
       if (res.status === 400 || res.status === 403 || res.status === 404) break; // неверный ключ/модель — повтор не поможет
@@ -3649,6 +3691,7 @@ document.getElementById('applyReceiptItemsBtn')?.addEventListener('click', () =>
   const storeVal = document.getElementById('receiptStoreName').value.trim() || 'Чек';
   const undoReceipt = makeStateUndo(['lists', 'recent', 'priceHistory'], 'Добавление чека отменено');
   receiptBuffer.forEach((it, idx) => {
+    if (tidyApi) it.name = tidyApi.renameIncoming(it.name); // «PiwTyskie0,5lPus» → «Пиво Tyskie 0,5 л, банка», если уже встречалось
     recordProductPrice(it.name, Number(it.price) || 0, storeVal, dateVal);
     if (dest === 'list') {
       if (!state.lists.length) state.lists.push({ id: 'list-' + uniqueSuffix(), title: 'Из чека', color: '#fef3c7', pinned: false, sortMode: 'manual', order: 0, collaborators: [], items: [] });
@@ -4165,6 +4208,22 @@ promosApi = initPromos({
   toast: (m) => showToast(m),
 });
 document.getElementById('menuPromosBtn')?.addEventListener('click', () => promosApi.open());
+tidyApi = initTidy({
+  getState: () => state,
+  ask: (payload, model) => askGeminiWithBackoff(payload, model),
+  estimate: (items) => estimatePricesWithAI(items, askGeminiWithBackoff),
+  makeUndo: (keys, label) => makeStateUndo(keys, label),
+  backup: (reason) => createBackup(reason),
+  save: () => saveState(),
+  toast: (m, undo) => showToast(m, undo || null),
+  formatMoney: (n) => formatMoney(n),
+  hasKey: () => { try { return !!localStorage.getItem('keepshop_gemini_api_key'); } catch (e) { return false; } },
+});
+document.getElementById('menuTidyBtn')?.addEventListener('click', () => tidyApi.open());
+const updaterApi = initUpdater({ backup: (reason) => createBackup(reason), toast: (m) => showToast(m) });
+document.getElementById('menuUpdateBtn')?.addEventListener('click', () => updaterApi.open());
+updaterApi.autoCheck();
+scheduleAutoPrices();
 promosApi.autoCheck();
 syncApi = initSync({
   getState: () => state,

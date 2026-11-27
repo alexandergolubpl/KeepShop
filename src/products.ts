@@ -20,6 +20,8 @@ export interface Product {
   /** добавлен пользователем или из его списков (не из встроенного каталога) */
   custom?: boolean;
   updatedAt?: number;
+  /** другие написания (сокращения из чеков и т.п.) — новые чеки получают нормальное название */
+  aliases?: string[];
 }
 
 export interface Category { id: string; label: string; icon: string; group: string }
@@ -136,7 +138,8 @@ export function upsertProduct(products: Product[], it: ItemLike): boolean {
 }
 
 export const findProduct = (products: Product[], name: string): Product | undefined =>
-  products.find(p => productKey(p.name) === productKey(name));
+  products.find(p => productKey(p.name) === productKey(name))
+  || products.find(p => (p.aliases || []).some(a => productKey(a) === productKey(name)));
 
 // ==================== Окно «📚 База товаров» ====================
 export interface ProductsUiDeps {
