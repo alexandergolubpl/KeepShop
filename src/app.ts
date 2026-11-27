@@ -11,6 +11,7 @@ import { initProductsUi, seedProducts, upsertProduct, findProduct, guessCategory
 import { convertUnitPrice } from './price-hints';
 import { initCards } from './cards';
 import { initSync } from './sync';
+import { initPromos } from './promos';
 import { shareText } from './native';
 import { AssociationIndex, REASON_LABEL } from './associations';
 // Поставляемая база товаров: стартовый справочник для новых установок
@@ -695,6 +696,7 @@ function buildSnapshot() {
 }
 
 let syncApi = null; // семейный доступ (src/sync.ts), создаётся при запуске
+let promosApi = null; // поиск акций (src/promos.ts)
 
 function persistState() {
   const json = JSON.stringify(buildSnapshot());
@@ -1151,6 +1153,7 @@ function renderItemCardHTML(list, item, itemIdx, totalCount, isReadOnly) {
     title: escapeHTML(item.name),
     total: est + formatMoney(item.qty * item.price),
     meta: `<span>${item.qty} ${escapeHTML(item.unit)} × ${est}${formatMoney(item.price)}</span>
+      ${!item.checked ? promoBadgeHTML(item) : ''}
       ${item.checked && item.checkedBy ? `<span class="text-emerald-600 dark:text-emerald-400 font-semibold">✓ взял(а): ${escapeHTML(item.checkedBy)}</span>` : item.addedBy ? `<span>👤 ${escapeHTML(item.addedBy)}</span>` : ''}
       <a href="${escapeHTML(storeHref)}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center px-1.5 py-px rounded-md bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 text-blue-700 dark:text-blue-300 text-[10px] font-bold max-w-full truncate">🔗 ${escapeHTML(item.storeName || 'В магазин')} ↗</a>`,
     body: `
@@ -1258,13 +1261,20 @@ function viewToggleHTML(target, compact, extraClass = '') {
   return `<button type="button" data-action="set-list-view" data-view="${next}" ${targetAttr} title="${compact ? 'Показать карточками' : 'Показать строками'}" class="px-2.5 py-1 rounded-xl bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 text-[11px] font-bold whitespace-nowrap ${extraClass}">${compact ? '▦ Карточки' : '☰ Строки'}</button>`;
 }
 
+/** Метка «🏷 −25%» у товара, на который найдена акция (src/promos.ts). */
+function promoBadgeHTML(item) {
+  const p = !item.checked && promosApi?.badgeFor(item.name);
+  if (!p) return '';
+  return `<button type="button" data-action="open-promos" data-promo-name="${escapeHTML(item.name)}" title="${escapeHTML(p.store + ': ' + p.title)}" class="inline-flex items-center px-1.5 py-px rounded-md bg-rose-600 text-white text-[10px] font-extrabold leading-4">🏷 ${p.discount ? '−' + p.discount + '%' : escapeHTML(p.store)}</button>`;
+}
+
 function renderItemRowHTML(list, item, isReadOnly) {
   const sum = (Number(item.qty) || 1) * (Number(item.price) || 0);
   const ids = `data-list-id="${list.id}" data-item-id="${item.id}"`;
   return itemRowShell({
     attrs: `data-row-item="${item.id}" ${ids} data-action="toggle-check" ${isReadOnly ? '' : 'data-row-drag="1"'}`,
     done: item.checked,
-    note: item.checked && item.checkedBy ? '✓ ' + escapeHTML(item.checkedBy) : '',
+    note: item.checked && item.checkedBy ? '✓ ' + escapeHTML(item.checkedBy) : promoBadgeHTML(item),
     lead: `<span class="w-[18px] h-[18px] rounded-[5px] border-2 flex items-center justify-center shrink-0 text-[11px] leading-none font-bold ${item.checked ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-slate-300 dark:border-zinc-600'}">${item.checked ? '✓' : ''}</span>`,
     title: escapeHTML(item.name),
     titleAttr: `title="${escapeHTML(item.desc || item.name)}"`,
@@ -1328,6 +1338,7 @@ function renderMainListView() {
             <button type="button" data-action="open-picker" data-list-id="${list.id}" class="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold">🧺 Подобрать</button>
             ${items.length ? `<button type="button" data-action="load-store-prices-list" data-list-id="${list.id}" class="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold" title="Ориентировочные цены по сетям рядом">📍 Цены</button>` : ''}
             <button type="button" data-action="open-picker" data-pk-tab="recipe" data-list-id="${list.id}" class="px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-800 dark:text-amber-300 text-xs font-bold">🍲 Из блюда</button>
+            ${items.some(i => !i.checked) ? `<button type="button" data-action="open-promos" class="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold" title="Найти акции в магазинах на товары из списка">🏷 Акции</button>` : ''}
             ${items.some(i => !(Number(i.price) > 0)) ? `<button type="button" data-action="ai-prices" data-list-id="${list.id}" class="px-3 py-1.5 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold" title="Оценить цены товаров без цены через Gemini">✨ Оценить цены (${items.filter(i => !(Number(i.price) > 0)).length})</button>` : ''}
         ${taken.length ? `<button type="button" data-action="clear-checked" data-list-id="${list.id}" class="px-3 py-1.5 rounded-xl bg-black/5 dark:bg-white/10 hover:bg-black/10 text-xs font-bold">🧹 Убрать взятые (${taken.length})</button>` : ''}
           </div>` : ''}
@@ -2973,6 +2984,7 @@ document.addEventListener('click', (e) => {
   const list = state.lists.find(l => l.id === listId);
 
   if (action === 'open-picker') openPicker(listId, actBtn.dataset.pkTab || 'popular');
+  else if (action === 'open-promos') { e.stopPropagation(); promosApi?.open(actBtn.dataset.promoName || undefined); return; }
   else if (action === 'load-store-prices-list') openStorePricesModal(listId);
   else if (action === 'open-price-history') openProductPriceHistoryModal(actBtn.dataset.productName);
   else if (action === 'set-list-color' && list) {
@@ -4142,6 +4154,18 @@ const cardsUi = initCards({
   saveFile: (blob, name) => downloadBlob(blob, name),
 });
 document.getElementById('headerCardsBtn')?.addEventListener('click', () => cardsUi.open());
+promosApi = initPromos({
+  // не взятые товары: сначала «Недавние», затем остальные списки
+  getItemNames: () => {
+    const main = ensureMainList();
+    const lists = [main, ...state.lists.filter(l => l.id !== main.id)];
+    return [...new Map(lists.flatMap(l => l.items || []).filter(i => !i.checked && i.name).map(i => [normName(i.name), i.name])).values()];
+  },
+  onChanged: () => renderApp(),
+  toast: (m) => showToast(m),
+});
+document.getElementById('menuPromosBtn')?.addEventListener('click', () => promosApi.open());
+promosApi.autoCheck();
 syncApi = initSync({
   getState: () => state,
   applyRemote: (patch) => applyRemoteState(patch),
